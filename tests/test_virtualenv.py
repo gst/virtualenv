@@ -1,4 +1,4 @@
-import virtualenv
+import glob
 import optparse
 import os
 import shutil
@@ -7,7 +7,11 @@ import tempfile
 import pytest
 import platform  # noqa
 
+from distutils import sysconfig
+
 from mock import patch, Mock
+
+import virtualenv
 
 
 def test_version():
@@ -68,7 +72,9 @@ def test_activate_after_future_statements():
         'from __future__ import with_statement',
         'from __future__ import print_function',
         '',
-        "import os; activate_this=os.path.join(os.path.dirname(os.path.realpath(__file__)), 'activate_this.py'); exec(compile(open(activate_this).read(), activate_this, 'exec'), dict(__file__=activate_this)); del os, activate_this",
+        "import os; activate_this=os.path.join(os.path.dirname(os.path.realpath(__file__)), 'activate_this.py'); "
+        "exec(compile(open(activate_this).read(), activate_this, 'exec'), dict(__file__=activate_this)); "
+        "del os, activate_this",
         '',
         'print("Hello, world!")'
     ]
@@ -105,7 +111,7 @@ def test_install_python_bin():
         home_dir, lib_dir, inc_dir, bin_dir = \
                                 virtualenv.path_locations(tmp_virtualenv)
         virtualenv.install_python(home_dir, lib_dir, inc_dir, bin_dir, False,
-                                  False)
+                                  False, False)
 
         if virtualenv.is_win:
             required_executables = ['python.exe', 'pythonw.exe']
@@ -139,3 +145,44 @@ def test_always_copy_option():
                     " symlink (to %s)" % (full_name, os.readlink(full_name))
     finally:
         shutil.rmtree(tmp_virtualenv)
+
+
+def test_install_relative_lib():
+    """make sure relative shared lib is well copied"""
+
+    queried_cfg_vars = []
+    orig_get_config_var = sysconfig.get_config_var
+
+    def get_config_var(var):
+        queried_cfg_vars.append(var)
+        ret = orig_get_config_var(var)
+        if var == 'LDFLAGS':
+            ret = ','.join(([ret] if ret else []) + ["-rpath,'$'ORIGIN/../lib"])
+        return ret
+
+    globs = []
+    orig_glob = glob.glob
+
+    def fake_glob(path):
+        ret = orig_glob(path)
+        if path.endswith('libpython*'):
+            globs.append(path)
+            ret.append('libpython.so')
+        return ret
+
+    copied = []
+    orig_copy_file = virtualenv.copyfile
+
+    def copy_file(src, dst, *args, **kwargs):
+        if src == 'libpython.so':
+            copied.append(src)
+        return orig_copy_file(src, dst, *args, **kwargs)
+
+    with patch('distutils.sysconfig.get_config_var', side_effect=get_config_var, autospec=True):
+        with patch('glob.glob', side_effect=fake_glob, autospec=True) as mock_glob:
+            with patch('virtualenv.copyfile', side_effect=copy_file, autospec=True):
+                test_install_python_bin()
+
+    # assert 'LDFLAGS' in queried_cfg_vars
+    # assert 1 == len(globs)
+    assert 1 == len(copied)

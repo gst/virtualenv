@@ -26,8 +26,6 @@ import distutils.spawn
 import distutils.sysconfig
 import struct
 import subprocess
-import pkgutil
-import tempfile
 import textwrap
 from distutils.util import strtobool
 from os.path import join
@@ -627,6 +625,13 @@ def main():
         help='Provides an alternative prompt prefix for this environment.')
 
     parser.add_option(
+        '--include-lib',
+        action='store_true',
+        help="Request to always include the python library (if applicable) to the target virtualenv. "
+             "By default it will be if we can detect it needs to (LDFLAGS['-rpath'] contains $ORIGIN == relative path)."
+    )
+
+    parser.add_option(
         '--setuptools',
         dest='setuptools',
         action='store_true',
@@ -709,7 +714,9 @@ def main():
                        no_setuptools=options.no_setuptools,
                        no_pip=options.no_pip,
                        no_wheel=options.no_wheel,
-                       symlink=options.symlink)
+                       symlink=options.symlink,
+                       include_lib=options.include_lib,
+                       )
     if 'after_install' in globals():
         after_install(options, home_dir)
 
@@ -910,7 +917,7 @@ def install_wheel(project_names, py_executable, search_dirs=None,
 def create_environment(home_dir, site_packages=False, clear=False,
                        prompt=None, search_dirs=None, download=False,
                        no_setuptools=False, no_pip=False, no_wheel=False,
-                       symlink=True):
+                       symlink=True, include_lib=False):
     """
     Creates a new environment in ``home_dir``.
 
@@ -924,7 +931,7 @@ def create_environment(home_dir, site_packages=False, clear=False,
 
     py_executable = os.path.abspath(install_python(
         home_dir, lib_dir, inc_dir, bin_dir,
-        site_packages=site_packages, clear=clear, symlink=symlink))
+        site_packages=site_packages, clear=clear, symlink=symlink, include_lib=include_lib))
 
     install_distutils(home_dir)
 
@@ -1089,7 +1096,8 @@ def subst_path(prefix_path, prefix, home_dir):
     return prefix_path.replace(prefix, home_dir, 1)
 
 
-def install_python(home_dir, lib_dir, inc_dir, bin_dir, site_packages, clear, symlink=True):
+def install_python(home_dir, lib_dir, inc_dir, bin_dir, site_packages, clear,
+                   symlink=True, include_lib=False):
     """Install just the base environment, no distutils patches etc"""
     if sys.executable.startswith(bin_dir):
         print('Please use the *system* python to run this script')
@@ -1382,8 +1390,11 @@ def install_python(home_dir, lib_dir, inc_dir, bin_dir, site_packages, clear, sy
             else:
                 copyfile(py_executable, full_pth, symlink)
 
+    if include_lib or is_relative_lib():
+        install_shared(bin_dir, symlink=symlink)
+
     cmd = [py_executable, '-c', 'import sys;out=sys.stdout;'
-        'getattr(out, "buffer", out).write(sys.prefix.encode("utf-8"))']
+           'getattr(out, "buffer", out).write(sys.prefix.encode("utf-8"))']
     logger.info('Testing executable with %s %s "%s"' % tuple(cmd))
     try:
         proc = subprocess.Popen(cmd,
@@ -1488,6 +1499,42 @@ def install_python_config(home_dir, bin_dir, prompt=None):
     install_files(home_dir, bin_dir, prompt, files)
     for name, content in files.items():
         make_exe(os.path.join(bin_dir, name))
+
+
+def is_relative_lib():
+    """
+    Check if the python was compiled with LDFLAGS -rpath and $ORIGIN
+    """
+    ldflags_var = distutils.sysconfig.get_config_var('LDFLAGS')
+    if ldflags_var is None:
+        return False
+    ldflags = ldflags_var.split(',')
+    n_flags = len(ldflags)
+    idx = 0
+    while idx < n_flags - 1:
+        flag = ldflags[idx]
+        if flag == '-rpath':
+            # rpath can contain multiple entries:
+            rpaths = ldflags[idx+1].split(os.pathsep)
+            for rpath in rpaths:
+                rpath = rpath.strip()
+                if rpath.startswith("'$'ORIGIN"):
+                    return True
+            idx += 1
+        idx += 1
+    return False
+
+
+def install_shared(bin_dir, symlink=True):
+    """copy (symlink by default) the python shared library to the target"""
+    logger.start_progress("Installing shared lib...")
+    current_shared = os.path.realpath(join(os.path.dirname(sys.executable), "..", "lib"))
+    target_shared = join(bin_dir, "..", "lib")
+    for libpython in glob.glob(join(current_shared, "libpython*")):
+        target_file = join(target_shared, os.path.basename(libpython))
+        copyfile(libpython, target_file, symlink=symlink)
+    logger.end_progress("done.")
+
 
 def install_distutils(home_dir):
     distutils_path = change_prefix(distutils.__path__[0], home_dir)
