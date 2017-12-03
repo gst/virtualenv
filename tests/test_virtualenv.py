@@ -147,6 +147,7 @@ def test_always_copy_option():
         shutil.rmtree(tmp_virtualenv)
 
 
+@pytest.mark.skipif("platform.system() != 'Linux'")
 @pytest.mark.parametrize(
     'rpath_val', [
         "'$'ORIGIN",
