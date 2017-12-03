@@ -147,7 +147,18 @@ def test_always_copy_option():
         shutil.rmtree(tmp_virtualenv)
 
 
-def test_install_relative_lib():
+@pytest.mark.parametrize(
+    'rpath_val', [
+        "'$'ORIGIN",
+        "foobar:baz:'$'ORIGIN",  # also check with multiple entries
+        r"\$ORIGIN",
+        r"foobar:baz:\$ORIGIN",
+    ]
+)
+@pytest.mark.parametrize(
+    'rpath_sep', [',', '=']
+)
+def test_install_relative_lib(rpath_val, rpath_sep):
     """make sure relative shared lib is well copied"""
 
     queried_cfg_vars = []
@@ -157,7 +168,7 @@ def test_install_relative_lib():
         queried_cfg_vars.append(var)
         ret = orig_get_config_var(var)
         if var == 'LDFLAGS':
-            ret = ','.join(([ret] if ret else []) + ["-rpath,'$'ORIGIN/../lib"])
+            ret = ','.join(([ret] if ret else []) + ["-rpath" + rpath_sep + rpath_val])
         return ret
 
     globs = []

@@ -1503,25 +1503,30 @@ def install_python_config(home_dir, bin_dir, prompt=None):
 
 def is_relative_lib():
     """
-    Check if the python was compiled with LDFLAGS -rpath and $ORIGIN
+    Check if the python was compiled with LDFLAGS -rpath and some $ORIGIN form
     """
     ldflags_var = distutils.sysconfig.get_config_var('LDFLAGS')
     if ldflags_var is None:
         return False
-    ldflags = ldflags_var.split(',')
+    ldflags = ldflags_var.split(',')  # ldfags are ',' separated
     n_flags = len(ldflags)
     idx = 0
-    while idx < n_flags - 1:
+    while idx < n_flags:
         flag = ldflags[idx]
-        if flag == '-rpath':
-            # rpath can contain multiple entries:
-            rpaths = ldflags[idx+1].split(os.pathsep)
-            for rpath in rpaths:
-                rpath = rpath.strip()
-                if rpath.startswith("'$'ORIGIN"):
-                    return True
-            idx += 1
         idx += 1
+        # nb: -rpath value can also be '=' or ',' separated ; handle both cases:
+        if flag.startswith('-rpath='):
+            rpath_var = flag.split('=', 1)[1]
+        elif flag == '-rpath' and idx < n_flags:
+            rpath_var = ldflags[idx]
+            idx += 1
+        else:  # not an -rpath
+            continue
+        # rpath can even contain multiple entries, os.pathsep separated:
+        for rpath in rpath_var.split(os.pathsep):
+            rpath = rpath.strip()
+            if rpath.startswith("'$'ORIGIN") or rpath.startswith(r'\$ORIGIN'):
+                return True
     return False
 
 
